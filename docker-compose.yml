@@ -17,7 +17,7 @@ services:
       - traefik.http.routers.dashboard.entrypoints=web
     restart: unless-stopped
 
-  # Fila rápida (bandeja de jobs) — no PHP seria Beanstalkd/Redis ao lado do PHP-FPM
+  # Fila rápida — Beanstalkd/Redis no mundo PHP
   redis:
     image: redis:7.4-alpine
     ports:
@@ -29,14 +29,35 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # API FastAPI — equivalente ao PHP-FPM + app Zend atrás do Apache/Traefik
+  # MySQL local do projeto (não é o mysql-dev ContaÁgil — MCP sem acesso)
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: streamsentinel
+      MYSQL_USER: streamsentinel
+      MYSQL_PASSWORD: streamsentinel
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # API HTTP — PHP-FPM + Zend atrás do Traefik
   api:
     build: .
     environment:
-      # Nome do serviço Docker = hostname interno (como host no application.ini)
       REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: mysql+asyncmy://streamsentinel:streamsentinel@mysql:3306/streamsentinel
     depends_on:
       redis:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     labels:
       - traefik.enable=true
@@ -44,3 +65,21 @@ services:
       - traefik.http.routers.api.entrypoints=web
       - traefik.http.services.api.loadbalancer.server.port=8000
     restart: unless-stopped
+
+  # Worker CLI — script em loop (php public/index.php worker)
+  # Mesma imagem da API; só muda o comando de entrada
+  worker:
+    build: .
+    command: ["python", "-m", "app.workers.transaction_ingest_worker"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: mysql+asyncmy://streamsentinel:streamsentinel@mysql:3306/streamsentinel
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

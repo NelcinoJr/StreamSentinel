@@ -35,3 +35,19 @@ class IngestTransactionResponse(BaseModel):
     transaction_id: UUID
     status: str
     message: str
+
+
+class TransactionReadResponse(BaseModel):
+    """
+    Read model — o que o GET devolve (JsonModel no Zend).
+    Não é a Entity de domínio; é o formato da API de consulta.
+    """
+
+    id: str
+    external_id: str
+    amount: str
+    currency: str
+    status: str
+    occurred_at: str | None
+    metadata: dict[str, Any]
+    created_at: str | None
