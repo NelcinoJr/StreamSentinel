@@ -62,13 +62,24 @@ async def process_one(payload: dict[str, Any]) -> None:
     """
     Processa UM job da fila.
     Equivale a: pegou o job do Beanstalkd → TableGateway::insert.
+    Depois marca status=processed (regra de domínio concluída).
     """
+    from uuid import UUID
+
+    from app.domain.entities.transaction import TransactionStatus
+
     session_factory = get_session_factory()
     async with session_factory() as session:
         repo = TransactionRepositoryImpl(session)
+        # Grava com status que veio da fila (accepted)
         await repo.save_from_event(payload)
+        # Atualiza para processed = "já persistido com sucesso"
+        await repo.update_status(
+            UUID(str(payload["id"])),
+            TransactionStatus.PROCESSED.value,
+        )
     logger.info(
-        "Persistido id=%s external_id=%s",
+        "Persistido id=%s external_id=%s status=processed",
         payload.get("id"),
         payload.get("external_id"),
     )

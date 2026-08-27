@@ -43,14 +43,16 @@ router = APIRouter(prefix="/transactions", tags=["transactions"])
     response_model=IngestTransactionResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Ingestão assíncrona de transação",
+    responses={
+        409: {"description": "external_id já existe (idempotência)"},
+    },
 )
 async def ingest_transaction(
     body: IngestTransactionRequest,
     use_case: IngestTransactionUseCase = Depends(build_ingest_use_case),
 ) -> IngestTransactionResponse:
-    # 1) body já validado pelo Pydantic (Form/InputFilter)
-    # 2) chama Service
-    # 3) 202 = aceito, Worker grava depois
+    # 1) body validado (Pydantic ≈ InputFilter)
+    # 2) Service: checa duplicata + enfileira
     result: IngestTransactionResult = await use_case.execute(
         IngestTransactionInput(
             external_id=body.external_id,
@@ -60,6 +62,19 @@ async def ingest_transaction(
             metadata=body.metadata,
         )
     )
+
+    # 3) Duplicata → 409 Conflict (como no Zend ao detectar unique)
+    if result.already_exists:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": result.message,
+                "transaction_id": str(result.transaction_id),
+                "status": result.status,
+            },
+        )
+
+    # 4) Novo → 202 Accepted
     return IngestTransactionResponse(
         transaction_id=result.transaction_id,
         status=result.status,

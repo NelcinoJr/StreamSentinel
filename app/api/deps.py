@@ -34,12 +34,6 @@ def get_redis() -> Redis:
     return _redis
 
 
-def build_ingest_use_case() -> IngestTransactionUseCase:
-    """Factory do caso de escrita/ingestão (publica na fila)."""
-    publisher = RedisEventPublisher(get_redis())
-    return IngestTransactionUseCase(publisher=publisher)
-
-
 async def get_db_session() -> AsyncIterator[AsyncSession]:
     """
     Abre uma session MySQL por request e fecha no fim.
@@ -49,6 +43,19 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
     factory = get_session_factory()
     async with factory() as session:
         yield session
+
+
+def build_ingest_use_case(
+    session: AsyncSession = Depends(get_db_session),
+) -> IngestTransactionUseCase:
+    """
+    Factory da ingestão:
+      - Finder → checa external_id (idempotência)
+      - Publisher → enfileira no Redis
+    """
+    publisher = RedisEventPublisher(get_redis())
+    finder = TransactionFinderImpl(session)
+    return IngestTransactionUseCase(publisher=publisher, finder=finder)
 
 
 def build_get_transaction_use_case(

@@ -1,16 +1,11 @@
 """
-Caso de uso: validar rápido + publicar na fila + HTTP 202.
+Caso de uso: validar + idempotência + publicar na fila.
 
 Paralelo Zend:
-  Application Service / Domain Service chamado pelo Controller.
-  Controller NÃO fala com Redis nem com Repository direto —
-  só chama este "serviço" (como um Service injetado no ZF2/3).
-
-Fluxo:
-  1. Monta a Entity de domínio
-  2. mark_accepted()
-  3. Publica evento no Redis (worker persiste depois)
-  4. Retorna payload para o Controller responder 202
+  Service que:
+    1) consulta se external_id já existe (SELECT / Finder)
+    2) se existe → conflito (Controller devolve 409)
+    3) se não → enfileira job (Beanstalkd/Redis) → 202
 """
 
 from __future__ import annotations
@@ -22,6 +17,7 @@ from typing import Any
 from uuid import UUID
 
 from app.domain.entities.transaction import Transaction
+from app.domain.ports.finders import TransactionFinderPort
 from app.domain.ports.queue import EventPublisherPort
 
 TRANSACTION_INGEST_CHANNEL = "streamsentinel:transactions:ingest"
@@ -29,7 +25,7 @@ TRANSACTION_INGEST_CHANNEL = "streamsentinel:transactions:ingest"
 
 @dataclass(frozen=True, slots=True)
 class IngestTransactionInput:
-    """DTO de entrada do caso de uso (já validado pelo Pydantic na borda)."""
+    """DTO de entrada (já validado pelo Pydantic)."""
 
     external_id: str
     amount: Decimal
@@ -40,21 +36,42 @@ class IngestTransactionInput:
 
 @dataclass(frozen=True, slots=True)
 class IngestTransactionResult:
-    """O que o Controller usa para montar a resposta 202."""
+    """
+    Resultado para o Controller.
+    already_exists=True → Controller responde 409 (não enfileirou).
+    """
 
     transaction_id: UUID
     status: str
     message: str
+    already_exists: bool = False
 
 
 class IngestTransactionUseCase:
-    def __init__(self, publisher: EventPublisherPort) -> None:
+    def __init__(
+        self,
+        publisher: EventPublisherPort,
+        finder: TransactionFinderPort,
+    ) -> None:
+        # publisher = fila (escrita assíncrona)
+        # finder = leitura para checar duplicata (CQRS: SELECT no Finder)
         self._publisher = publisher
+        self._finder = finder
 
     async def execute(
         self,
         data: IngestTransactionInput,
     ) -> IngestTransactionResult:
+        # --- Idempotência: mesmo external_id não entra de novo ---
+        existing = await self._finder.find_by_external_id(data.external_id)
+        if existing is not None:
+            return IngestTransactionResult(
+                transaction_id=UUID(str(existing["id"])),
+                status=str(existing["status"]),
+                message="Transaction already exists for this external_id",
+                already_exists=True,
+            )
+
         transaction = Transaction(
             external_id=data.external_id,
             amount=data.amount,
@@ -82,4 +99,5 @@ class IngestTransactionUseCase:
             transaction_id=transaction.id,
             status=transaction.status.value,
             message="Transaction accepted for asynchronous processing",
+            already_exists=False,
         )
