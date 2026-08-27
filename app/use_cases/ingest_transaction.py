@@ -21,6 +21,8 @@ from app.domain.ports.finders import TransactionFinderPort
 from app.domain.ports.queue import EventPublisherPort
 
 TRANSACTION_INGEST_CHANNEL = "streamsentinel:transactions:ingest"
+# Fila de falhas (dead-letter) — jobs que esgotaram as tentativas
+TRANSACTION_INGEST_DLQ = "streamsentinel:transactions:ingest:dlq"
 
 
 @dataclass(frozen=True, slots=True)
