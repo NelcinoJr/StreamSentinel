@@ -17,10 +17,30 @@ services:
       - traefik.http.routers.dashboard.entrypoints=web
     restart: unless-stopped
 
-  whoami:
-    image: traefik/whoami:v1.11
+  # Fila rápida (bandeja de jobs) — no PHP seria Beanstalkd/Redis ao lado do PHP-FPM
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # API FastAPI — equivalente ao PHP-FPM + app Zend atrás do Apache/Traefik
+  api:
+    build: .
+    environment:
+      # Nome do serviço Docker = hostname interno (como host no application.ini)
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.api.rule=Host(`api.streamsentinel.local`)
       - traefik.http.routers.api.entrypoints=web
+      - traefik.http.services.api.loadbalancer.server.port=8000
     restart: unless-stopped
